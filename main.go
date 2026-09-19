@@ -1,35 +1,46 @@
 package main
 
 import (
-	"fmt"
-	"log"
-	"net/http"
-	"sync"
+	"errors"
+	"strconv"
+	"time"
 )
 
-type Counter struct {
-	mu      sync.Mutex
-	counter int
-}
-
-func (c *Counter) handler(w http.ResponseWriter, r *http.Request) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.counter++
-}
-
-func (c *Counter) printHandler(w http.ResponseWriter, r *http.Request) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	fmt.Fprintf(w, "Counter: %d", c.counter)
-}
+type Amount int64
 
 func main() {
-	counter := &Counter{}
+	parser("5s", "3", "10.00")
+}
 
-	http.HandleFunc("/add", counter.handler)
-	http.HandleFunc("/print", counter.printHandler)
-	log.Fatal(http.ListenAndServe(":8111", nil))
+func parser(reqTimeout, maxRetries, minOrderAmount string) (time.Duration, int, Amount, error) {
+	if reqTimeout == "" {
+		return 0, 0, 0, errors.New("request timeout is required")
+	}
+
+	if maxRetries == "" {
+		return 0, 0, 0, errors.New("max retries is required")
+	}
+
+	if minOrderAmount == "" {
+		return 0, 0, 0, errors.New("minimum order amount is required")
+	}
+
+	timeout, err := time.ParseDuration(reqTimeout)
+	if err != nil {
+		return 0, 0, 0, errors.New("invalid request timeout")
+	}
+
+	retries, err := strconv.Atoi(maxRetries)
+	if err != nil {
+		return 0, 0, 0, errors.New("invalid max retries")
+	}
+
+	orderAmountFloat, err := strconv.ParseFloat(minOrderAmount, 64)
+	if err != nil {
+		return 0, 0, 0, errors.New("invalid minimum order amount")
+	}
+
+	orderAmount := Amount(orderAmountFloat * 100)
+
+	return timeout, retries, orderAmount, nil
 }

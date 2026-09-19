@@ -1,31 +1,28 @@
 package main
 
-import (
-	"sync"
-	"testing"
-)
+import "testing"
 
-func TestCounterConcurrent(t *testing.T) {
-	counter := &Counter{}
-
-	var wg sync.WaitGroup
-
-	for i := 0; i < 1000; i++ {
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-
-			counter.handler(nil, nil)
-		}()
+func TestParser(t *testing.T) {
+	testCases := []struct {
+		name           string
+		reqTimeout     string
+		maxRetries     string
+		minOrderAmount string
+		expectedError  error
+	}{
+		{"valid", "5s", "3", "10.00", nil},
+		{"invalid reqTimeout", "invalid", "3", "10.00", nil},
+		{"invalid maxRetries", "5s", "invalid", "10.00", nil},
+		{"invalid minOrderAmount", "5s", "3", "invalid", nil},
 	}
 
-	wg.Wait()
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			time, retries, orderAmount, err := parser(tt.reqTimeout, tt.maxRetries, tt.minOrderAmount)
 
-	counter.mu.Lock()
-	defer counter.mu.Unlock()
-
-	if counter.counter != 1000 {
-		t.Fatalf("expected 1000, got %d", counter.counter)
+			if err != tt.expectedError {
+				t.Errorf("got %d, want %d", err, tt.expectedError)
+			}
+		})
 	}
 }
