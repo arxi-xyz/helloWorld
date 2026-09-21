@@ -1,46 +1,31 @@
 package main
 
 import (
-	"errors"
-	"strconv"
-	"time"
+	"io"
+	"net/http"
 )
 
-type Amount int64
-
 func main() {
-	parser("5s", "3", "10.00")
-}
 
-func parser(reqTimeout, maxRetries, minOrderAmount string) (time.Duration, int, Amount, error) {
-	if reqTimeout == "" {
-		return 0, 0, 0, errors.New("request timeout is required")
-	}
+	http.HandleFunc("/compare", func(w http.ResponseWriter, r *http.Request) {
 
-	if maxRetries == "" {
-		return 0, 0, 0, errors.New("max retries is required")
-	}
+	})
 
-	if minOrderAmount == "" {
-		return 0, 0, 0, errors.New("minimum order amount is required")
-	}
+	http.HandleFunc("/encode", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+			return
+		}
+		defer r.Body.Close()
 
-	timeout, err := time.ParseDuration(reqTimeout)
-	if err != nil {
-		return 0, 0, 0, errors.New("invalid request timeout")
-	}
+		token := string(body)
+		digest := token.Hash(token)
 
-	retries, err := strconv.Atoi(maxRetries)
-	if err != nil {
-		return 0, 0, 0, errors.New("invalid max retries")
-	}
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(digest.Hex()))
+	})
 
-	orderAmountFloat, err := strconv.ParseFloat(minOrderAmount, 64)
-	if err != nil {
-		return 0, 0, 0, errors.New("invalid minimum order amount")
-	}
-
-	orderAmount := Amount(orderAmountFloat * 100)
-
-	return timeout, retries, orderAmount, nil
+	http.ListenAndServe(":8080", nil)
 }
