@@ -1,93 +1,175 @@
 package main
 
 import (
+	"bytes"
+	"fmt"
+	"io"
+	"os"
+	"sync"
 	"testing"
 )
 
-func TestBatchProcess_NilInput(t *testing.T) {
-	var orders []Order
+func TestGetMissingKey(t *testing.T) {
+	c := NewCache()
 
-	result := batchProcess(orders)
-
-	if result == nil {
-		t.Fatal("expected non-nil batch result")
+	value, ok := c.Get("missing")
+	if ok {
+		t.Fatalf("Get returned ok=true for missing key, value=%q", value)
 	}
-
-	if len(result) != 0 {
-		t.Fatalf("expected 0 batches, got %d", len(result))
+	if value != "" {
+		t.Fatalf("Get returned value %q for missing key", value)
 	}
 }
 
-func TestBatchProcess_EmptyInput(t *testing.T) {
-	orders := []Order{}
+func TestSetAndGet(t *testing.T) {
+	c := NewCache()
 
-	result := batchProcess(orders)
+	c.Set("name", "world")
 
-	if result == nil {
-		t.Fatal("expected non-nil batch result")
+	value, ok := c.Get("name")
+	if !ok {
+		t.Fatal("Get returned ok=false for an existing key")
 	}
-
-	if len(result) != 0 {
-		t.Fatalf("expected 0 batches, got %d", len(result))
-	}
-}
-
-func TestBatchProcess_Aliasing(t *testing.T) {
-	input := []Order{
-		"order1",
-		"order2",
-		"order3",
-	}
-
-	batches := batchProcess(input)
-
-	// mutate original input
-	input[0] = "changed"
-
-	if batches[0][0] != "order1" {
-		t.Fatalf(
-			"aliasing detected: batch changed after input mutation, got %s",
-			batches[0][0],
-		)
+	if value != "world" {
+		t.Fatalf("Get returned %q, want %q", value, "world")
 	}
 }
 
-func TestBatchProcess_BatchSize(t *testing.T) {
-	orders := make([]Order, 250)
+func TestSetOverwritesExistingValue(t *testing.T) {
+	c := NewCache()
 
-	for i := range orders {
-		orders[i] = Order("order")
+	c.Set("name", "first")
+	c.Set("name", "second")
+
+	value, ok := c.Get("name")
+	if !ok {
+		t.Fatal("Get returned ok=false after overwrite")
 	}
-
-	batches := batchProcess(orders)
-
-	if len(batches) != 3 {
-		t.Fatalf("expected 3 batches, got %d", len(batches))
-	}
-
-	if len(batches[0]) != 100 {
-		t.Fatalf("expected first batch size 100")
-	}
-
-	if len(batches[1]) != 100 {
-		t.Fatalf("expected second batch size 100")
-	}
-
-	if len(batches[2]) != 50 {
-		t.Fatalf("expected third batch size 50")
+	if value != "second" {
+		t.Fatalf("Get returned %q, want %q", value, "second")
 	}
 }
 
-func BenchmarkBatchProcess_CopyBoundary(b *testing.B) {
-	orders := make([]Order, 10000)
+func TestDeleteRemovesKey(t *testing.T) {
+	c := NewCache()
 
-	for i := range orders {
-		orders[i] = Order("order")
+	c.Set("name", "world")
+	c.Delete("name")
+
+	value, ok := c.Get("name")
+	if ok {
+		t.Fatalf("Get returned ok=true after Delete, value=%q", value)
+	}
+}
+
+func TestDeleteMissingKey(t *testing.T) {
+	c := NewCache()
+
+	c.Set("name", "world")
+	c.Delete("missing")
+
+	value, ok := c.Get("name")
+	if !ok || value != "world" {
+		t.Fatalf("Delete of a missing key changed existing data: got %q, ok=%v", value, ok)
+	}
+}
+
+func TestSnapshotSortedPrintsKeysInOrder(t *testing.T) {
+	c := NewCache()
+	c.Set("b", "two")
+	c.Set("a", "one")
+	c.Set("c", "three")
+
+	output := captureStdout(t, func() {
+		c.SnapshotSorted()
+	})
+
+	want := "a: one\nb: two\nc: three\n"
+	if output != want {
+		t.Fatalf("SnapshotSorted output = %q, want %q", output, want)
+	}
+}
+
+func TestSnapshotSortedEmpty(t *testing.T) {
+	c := NewCache()
+
+	output := captureStdout(t, func() {
+		c.SnapshotSorted()
+	})
+
+	if output != "" {
+		t.Fatalf("SnapshotSorted on empty cache printed %q", output)
+	}
+}
+
+func TestConcurrentReadersAndWriters(t *testing.T) {
+	c := NewCache()
+
+	const goroutines = 8
+	const keysPerWriter = 50
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines * 2)
+	start := make(chan struct{})
+
+	for i := 0; i < goroutines; i++ {
+		go func(id int) {
+			defer wg.Done()
+	
+			<-start
+	
+			for n := 0; n < keysPerWriter; n++ {
+				key := fmt.Sprintf("w%d-k%d", id, n)
+				c.Set(key, fmt.Sprintf("v-%d-%d", id, n))
+			}
+		}(i)
+	}
+	
+	for i := 0; i < goroutines; i++ {
+		go func(id int) {
+			defer wg.Done()
+	
+			<-start
+	
+			for n := 0; n < keysPerWriter; n++ {
+				key := fmt.Sprintf("w%d-k%d", id, n)
+				c.Get(key)
+			}
+		}(i)
+	}
+	
+	close(start)
+	wg.Wait()
+
+	for i := 0; i < goroutines; i++ {
+		for n := 0; n < keysPerWriter; n++ {
+			key := fmt.Sprintf("w%d-k%d", i, n)
+			want := fmt.Sprintf("v-%d-%d", i, n)
+			got, ok := c.Get(key)
+			if !ok || got != want {
+				t.Fatalf("Get(%q) = %q, %v; want %q, true", key, got, ok, want)
+			}
+		}
+	}
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+
+	original := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
 	}
 
-	b.ResetTimer()
+	os.Stdout = w
+	fn()
+	w.Close()
+	os.Stdout = original
 
-	for i := 0; i < b.N; i++ {
-		_ = batchProcess(orders)
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatalf("reading stdout: %v", err)
 	}
+	return buf.String()
 }

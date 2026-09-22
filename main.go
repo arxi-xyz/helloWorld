@@ -1,39 +1,53 @@
 package main
 
-import "fmt"
-
-const (
-	batchSize = 100
+import (
+	"fmt"
+	"sort"
+	"sync"
 )
 
-type Order string
+type Cache struct {
+	mu   sync.Mutex
+	data map[string]string
+}
 
-func main() {
-	orders := []Order{"order1", "order2", "order3"}
-
-	batchData := batchProcess(orders)
-
-	fmt.Println("Batch Data:")
-	for i, batch := range batchData {
-		fmt.Printf("Batch %d: %v\n", i+1, batch)
+func NewCache() *Cache {
+	return &Cache{
+		data: make(map[string]string),
 	}
 }
 
-func batchProcess(orders []Order) [][]Order {
-	newData := make([]Order, len(orders))
-	copy(newData, orders)
+func (c *Cache) Get(key string) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	value, ok := c.data[key]
+	return value, ok
+}
 
-	batchData := make([][]Order, 0, (len(newData)+batchSize-1)/batchSize)
+func (c *Cache) Set(key, value string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.data[key] = value
+}
 
-	for i := 0; i < len(newData); i += batchSize {
-		end := i + batchSize
-		if end > len(newData) {
-			end = len(newData)
-		}
+func (c *Cache) Delete(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.data, key)
+}
 
-		batch := newData[i:end:end]
-		batchData = append(batchData, batch)
+func (c *Cache) SnapshotSorted() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	keys := make([]string, 0, len(c.data))
+	for key := range c.data {
+		keys = append(keys, key)
 	}
 
-	return batchData
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		fmt.Printf("%s: %s\n", key, c.data[key])
+	}
 }
